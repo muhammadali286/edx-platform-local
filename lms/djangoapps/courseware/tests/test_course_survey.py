@@ -16,6 +16,7 @@ from common.test.utils import XssTestMixin
 from lms.djangoapps.courseware.tests.helpers import LoginEnrollmentTestCase
 from lms.djangoapps.survey.models import SurveyAnswer, SurveyForm
 from openedx.features.course_experience import course_home_url
+from openedx.features.course_experience.url_helpers import make_learning_mfe_courseware_url
 
 
 class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTestMixin):
@@ -94,14 +95,32 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         Helper method to asswer that all known conditionally redirect points do
         not redirect as expected
         """
-        for view_name in ['courseware', 'progress']:
-            resp = self.client.get(
-                reverse(
-                    view_name,
-                    kwargs={'course_id': str(course.id)}
-                )
+
+        # Make sure we get to the progress page.
+        resp = self.client.get(
+            reverse(
+                'progress',
+                kwargs={'course_id': str(course.id)}
             )
-            assert resp.status_code == 200
+        )
+        assert resp.status_code == 200
+
+        # Make sure we are redirected to the MFE
+        resp = self.client.get(
+            reverse(
+                'courseware',
+                kwargs={'course_id': str(course.id)}
+            )
+        )
+        assert resp.status_code == 302
+        expected_redirect_url = make_learning_mfe_courseware_url(
+            course.id,
+            None,
+            None,
+            params=None,
+            preview=False
+        )
+        assert resp.url == expected_redirect_url
 
     def test_visiting_course_without_survey(self):
         """
