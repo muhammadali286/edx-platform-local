@@ -34,10 +34,10 @@ from olxcleaner.exceptions import ErrorLevel
 from olxcleaner.reporting import report_error_summary, report_errors
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import CourseKey, UsageKey
-from opaque_keys.edx.locator import LibraryLocator
+from opaque_keys.edx.locator import LibraryLocator, LibraryContainerLocator
 from organizations.api import add_organization_course, ensure_organization
 from organizations.exceptions import InvalidOrganizationException
-from organizations.models import Organization, OrganizationCourse
+from organizations.models import Organization
 from path import Path as path
 from pytz import UTC
 from user_tasks.models import UserTaskArtifact, UserTaskStatus
@@ -84,7 +84,7 @@ from xmodule.modulestore.exceptions import DuplicateCourseError, InvalidProctori
 from xmodule.modulestore.xml_exporter import export_course_to_xml, export_library_to_xml
 from xmodule.modulestore.xml_importer import CourseImportException, import_course_from_xml, import_library_from_xml
 
-from .models import LearningContextLinksStatus, LearningContextLinksStatusChoices, PublishableEntityLink
+from .models import ContainerLink, LearningContextLinksStatus, LearningContextLinksStatusChoices, ComponentLink
 from .outlines import update_outline_from_modulestore
 from .outlines_regenerate import CourseOutlineRegenerate
 from .toggles import bypass_olx_failure_enabled
@@ -98,6 +98,24 @@ FULL_COURSE_REINDEX_THRESHOLD = 1
 ALL_ALLOWED_XBLOCKS = frozenset(
     [entry_point.name for entry_point in entry_points(group="xblock.v1")]
 )
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/115.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Connection": "keep-alive",
+}
+
+
+class LinkState:
+    """
+    Links State Enumeration
+    """
+    BROKEN = 'broken'
+    LOCKED = 'locked'
+    EXTERNAL_FORBIDDEN = 'external-forbidden'
 
 
 def clone_instance(instance, field_values):
@@ -154,12 +172,6 @@ def rerun_course(source_course_key_string, destination_course_key_string, user_i
         # call edxval to attach videos to the rerun
         copy_course_videos(source_course_key, destination_course_key)
 
-        # Copy OrganizationCourse
-        organization_course = OrganizationCourse.objects.filter(course_id=source_course_key_string).first()
-
-        if organization_course:
-            clone_instance(organization_course, {'course_id': destination_course_key_string})
-
         # Copy RestrictedCourse
         restricted_course = RestrictedCourse.objects.filter(course_key=source_course_key).first()
 
@@ -169,7 +181,7 @@ def rerun_course(source_course_key_string, destination_course_key_string, user_i
             for country_access_rule in country_access_rules:
                 clone_instance(country_access_rule, {'restricted_course': new_restricted_course})
 
-        org_data = ensure_organization(source_course_key.org)
+        org_data = ensure_organization(destination_course_key.org)
         add_organization_course(org_data, destination_course_key)
         return "succeeded"
 
@@ -464,12 +476,12 @@ def sync_discussion_settings(course_key, user):
 
         if (
             ENABLE_NEW_STRUCTURE_DISCUSSIONS.is_enabled()
-            and not course.discussions_settings['provider_type'] == Provider.OPEN_EDX
+            and not course.discussions_settings.get('provider_type', None) == Provider.OPEN_EDX
+            and not course.discussions_settings.get('provider', None) == Provider.OPEN_EDX
         ):
             LOGGER.info(f"New structure is enabled, also updating {course_key} to use new provider")
             course.discussions_settings['enable_graded_units'] = False
             course.discussions_settings['unit_level_visibility'] = True
-            course.discussions_settings['provider'] = Provider.OPEN_EDX
             course.discussions_settings['provider_type'] = Provider.OPEN_EDX
             modulestore().update_item(course, user.id)
 
@@ -1129,7 +1141,7 @@ def _check_broken_links(task_instance, user_id, course_key_string, language):
     """
     user = _validate_user(task_instance, user_id, language)
 
-    task_instance.status.set_state('Scanning')
+    task_instance.status.set_state(UserTaskStatus.IN_PROGRESS)
     course_key = CourseKey.from_string(course_key_string)
 
     url_list = _scan_course_for_links(course_key)
@@ -1198,10 +1210,13 @@ def _scan_course_for_links(course_key):
         blocks.extend(vertical.get_children())
 
     for block in blocks:
+        # Excluding 'drag-and-drop-v2' as it contains data of object type instead of string, causing errors,
+        # and it doesn't contain user-facing links to scan.
+        if block.category == 'drag-and-drop-v2':
+            continue
         block_id = str(block.usage_key)
         block_info = get_block_info(block)
         block_data = block_info['data']
-
         url_list = _get_urls(block_data)
         urls_to_validate += [[block_id, url] for url in url_list]
 
@@ -1212,7 +1227,7 @@ def _get_urls(content):
     """
     Finds and returns a list of URLs in the given content.
     Includes strings following 'href=' and 'src='.
-    Excludes strings that are only '#'.
+    Excludes strings that are only '#' or start with 'data:'.
 
     Arguments:
         content (str): entire content of a block
@@ -1220,7 +1235,7 @@ def _get_urls(content):
     Returns:
         list: urls
     """
-    regex = r'\s+(?:href|src)=["\'](?!#)([^"\']*)["\']'
+    regex = r'\s+(?:href|src)=["\'](?!#|data:)([^"\']*)["\']'
     url_list = re.findall(regex, content)
     return url_list
 
@@ -1249,7 +1264,7 @@ async def _validate_urls_access_in_batches(url_list, course_key, batch_size=100)
 
 async def _validate_batch(batch, course_key):
     """Validate a batch of URLs"""
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers=DEFAULT_HEADERS) as session:
         tasks = [_validate_url_access(session, url_data, course_key) for url_data in batch]
         batch_results = await asyncio.gather(*tasks)
         return batch_results
@@ -1274,6 +1289,7 @@ async def _validate_url_access(session, url_data, course_key):
         }
     """
     block_id, url = url_data
+    url = url.strip()  # Trim leading/trailing whitespace
     result = {'block_id': block_id, 'url': url}
     standardized_url = _convert_to_standard_url(url, course_key)
     try:
@@ -1294,11 +1310,14 @@ def _convert_to_standard_url(url, course_key):
             ...asset-v1:edX+DemoX+Demo_Course+type@asset+block/getting-started_x250.png
         /static/getting-started_x250.png
         /container/block-v1:edX+DemoX+Demo_Course+type@vertical+block@2152d4a4aadc4cb0af5256394a3d1fc7
+        /jump_to_id/2152d4a4aadc4cb0af5256394a3d1fc7
     """
     if _is_studio_url_without_base(url):
         if url.startswith('/static/'):
             processed_url = replace_static_urls(f'\"{url}\"', course_id=course_key)[1:-1]
             return 'https://' + settings.CMS_BASE + processed_url
+        elif url.startswith('/jump_to_id/'):
+            return f'https://{settings.LMS_BASE}/courses/{course_key}{url}'
         elif url.startswith('/'):
             return 'https://' + settings.CMS_BASE + url
         else:
@@ -1328,7 +1347,8 @@ def _filter_by_status(results):
 
     Statuses:
         200: OK. No need to do more
-        403: Forbidden. Record as locked link.
+        403: Forbidden. Record as locked link if it is studio link.
+        403: Forbidden. Record as external-forbidden link if it is external link
         None: Error. Retry up to 3 times.
         Other: Failure. Record as broken link.
 
@@ -1341,7 +1361,7 @@ def _filter_by_status(results):
 
     Example return:
         [
-            [block_id1, filtered_results_url1, is_locked],
+            [block_id1, filtered_results_url1, link_state],
             ...
         ],
         [
@@ -1353,14 +1373,16 @@ def _filter_by_status(results):
     retry_list = []
     for result in results:
         status, block_id, url = result['status'], result['block_id'], result['url']
-        if status is None:
+        if status is None and _is_studio_url(url):
             retry_list.append([block_id, url])
         elif status == 200:
             continue
         elif status == 403 and _is_studio_url(url):
-            filtered_results.append([block_id, url, True])
+            filtered_results.append([block_id, url, LinkState.LOCKED])
+        elif status in [403, 500, None] and not _is_studio_url(url):
+            filtered_results.append([block_id, url, LinkState.EXTERNAL_FORBIDDEN])
         else:
-            filtered_results.append([block_id, url, False])
+            filtered_results.append([block_id, url, LinkState.BROKEN])
 
     return filtered_results, retry_list
 
@@ -1457,7 +1479,8 @@ def create_or_update_upstream_links(
         updated=created,
     )
     if replace:
-        PublishableEntityLink.objects.filter(downstream_context_key=course_key).delete()
+        ComponentLink.objects.filter(downstream_context_key=course_key).delete()
+        ContainerLink.objects.filter(downstream_context_key=course_key).delete()
     try:
         xblocks = store.get_items(course_key, settings={"upstream": lambda x: x is not None})
     except ItemNotFoundError:
@@ -1465,7 +1488,7 @@ def create_or_update_upstream_links(
         course_status.update_status(LearningContextLinksStatusChoices.FAILED)
         return
     for xblock in xblocks:
-        create_or_update_xblock_upstream_link(xblock, course_key_str, created)
+        create_or_update_xblock_upstream_link(xblock, course_key, created)
     course_status.update_status(LearningContextLinksStatusChoices.COMPLETED)
 
 
@@ -1483,7 +1506,27 @@ def handle_unlink_upstream_block(upstream_usage_key_string: str) -> None:
         LOGGER.exception(f'Invalid upstream usage_key: {upstream_usage_key_string}')
         return
 
-    for link in PublishableEntityLink.objects.filter(
+    for link in ComponentLink.objects.filter(
         upstream_usage_key=upstream_usage_key,
+    ):
+        make_copied_tags_editable(str(link.downstream_usage_key))
+
+
+@shared_task
+@set_code_owner_attribute
+def handle_unlink_upstream_container(upstream_container_key_string: str) -> None:
+    """
+    Handle updates needed to downstream blocks when the upstream link is severed.
+    """
+    ensure_cms("handle_unlink_upstream_container may only be executed in a CMS context")
+
+    try:
+        upstream_container_key = LibraryContainerLocator.from_string(upstream_container_key_string)
+    except (InvalidKeyError):
+        LOGGER.exception(f'Invalid upstream container_key: {upstream_container_key_string}')
+        return
+
+    for link in ContainerLink.objects.filter(
+        upstream_container_key=upstream_container_key,
     ):
         make_copied_tags_editable(str(link.downstream_usage_key))
