@@ -90,10 +90,10 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
                 reverse('course_survey', kwargs={'course_id': str(course.id)})
             )
 
-    def _assert_no_redirect(self, course):
+    def _assert_no_survey_redirect(self, course):
         """
-        Helper method to asswer that all known conditionally redirect points do
-        not redirect as expected
+        Helper method to assert that all known conditionally redirecting endpoints do
+        not redirect to the survey as expected
         """
 
         # Make sure we get to the progress page.
@@ -105,7 +105,7 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         )
         assert resp.status_code == 200
 
-        # Make sure we are redirected to the MFE
+        # Make sure we are redirected to the MFE for courseware
         resp = self.client.get(
             reverse(
                 'courseware',
@@ -127,7 +127,7 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         Verifies that going to the courseware which does not have a survey does
         not redirect to a survey
         """
-        self._assert_no_redirect(self.course_without_survey)
+        self._assert_no_survey_redirect(self.course_without_survey)
 
     def test_visiting_course_with_survey_redirects(self):
         """
@@ -162,7 +162,7 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         )
         assert resp.status_code == 200
 
-        self._assert_no_redirect(self.course)
+        self._assert_no_survey_redirect(self.course)
 
     def test_course_id_field(self):
         """
@@ -199,7 +199,7 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         )
         assert resp.status_code == 200
 
-        self._assert_no_redirect(self.course)
+        self._assert_no_survey_redirect(self.course)
 
         # however we want to make sure we persist the course_id
         answer_objs = SurveyAnswer.objects.filter(
@@ -214,7 +214,7 @@ class SurveyViewsTests(LoginEnrollmentTestCase, SharedModuleStoreTestCase, XssTe
         """
         Verifies that going to the courseware with a required, but non-existing survey, does not redirect
         """
-        self._assert_no_redirect(self.course_with_bogus_survey)
+        self._assert_no_survey_redirect(self.course_with_bogus_survey)
 
     def test_visiting_survey_with_bogus_survey_name(self):
         """

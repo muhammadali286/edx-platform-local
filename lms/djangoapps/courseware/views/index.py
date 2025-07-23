@@ -31,8 +31,6 @@ from ..permissions import MASQUERADE_AS_STUDENT
 
 log = logging.getLogger("edx.courseware.views.index")
 
-CONTENT_DEPTH = 2
-
 
 class CoursewareIndex(View):
     """
@@ -70,10 +68,12 @@ class CoursewareIndex(View):
         # Course load to resolve chapters/sections
         with modulestore().bulk_operations(self.course_key):
             course = get_course_with_access(
-                request.user, 'load', self.course_key,
-                depth=CONTENT_DEPTH,
+                request.user,
+                "load",
+                self.course_key,
+                depth=2,
                 check_if_enrolled=True,
-                check_if_authenticated=True
+                check_if_authenticated=True,
             )
 
         # Get the chapter, section and unit blocks so that we can redirect to the right content
