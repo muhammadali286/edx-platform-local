@@ -41,7 +41,7 @@ jobs:
           - "common-with-lms"
           - "common-with-cms"
           - "xmodule-with-lms"
-          - "xmodule-with-cms"
+          - "xmodule-with-cms" 
         mongo-version:
           - "7.0"
         os-version:
