@@ -79,7 +79,7 @@
 ##############################################################################
 
 # ... add dependencies here
-h5p-xblock @ git+https://github.com/edly-io/h5p-xblock.git@muhammadali286/upgrade-storage-django-52
+h5p-xblock @ git+https://github.com/edly-io/h5pxblock.git@muhammadali286/upgrade-storage-django-52
 
 ##############################################################################
 # Critical fixes for packages that are not yet available in a PyPI release.
