@@ -770,6 +770,8 @@ h2==4.3.0
     # via
     #   -r requirements/edx/base.txt
     #   httpx
+h5p-xblock @ git+https://github.com/edly-io/h5pxblock.git@muhammadali286/upgrade-storage-django-52
+    # via -r requirements/edx/base.txt
 help-tokens==3.2.0
     # via -r requirements/edx/base.txt
 hpack==4.1.0
@@ -1605,6 +1607,7 @@ xblock[django]==5.2.0
     #   edx-completion
     #   edx-sga
     #   edx-when
+    #   h5p-xblock
     #   lti-consumer-xblock
     #   ora2
     #   staff-graded-xblock
